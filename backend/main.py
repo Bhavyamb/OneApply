@@ -1,3 +1,237 @@
+import html as html_lib
+import os
+import re
+from typing import List
+from urllib.parse import urlparse
+
+import requests
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from pymongo import MongoClient, DESCENDING
+
+load_dotenv()
+
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "OneApply")
+
+client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+db = client[MONGO_DB_NAME]
+jobs_collection = db["jobs"]
+
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,https://bhavyamb.github.io",
+    ).split(",")
+    if origin.strip()
+]
+
+app = FastAPI(title="OneApply API")
+app.add_middleware(
+   CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"https://.*\.github\.io",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class JobCreate(BaseModel):
+    title: str
+    company: str
+    location: str = "Remote"
+    url: str = ""
+    notes: str = ""
+
+
+class Job(JobCreate):
+    id: str
+
+
+class SkillProfile(BaseModel):
+    skills: List[str]
+
+
+class JobImportRequest(BaseModel):
+    url: str
+
+
+class JobImportResponse(BaseModel):
+    title: str
+    company: str
+    location: str
+    url: str
+    notes: str
+
+
+class ResumeRequest(BaseModel):
+    resume_text: str
+    job_title: str
+    company: str
+    candidate_name: str = "Candidate"
+
+
+class CoverLetterResponse(BaseModel):
+    cover_letter: str
+
+
+class JobMatch(Job):
+    match_score: int
+    matched_skills: List[str]
+
+
+SYNONYMS = {
+    "javascript": "javascript",
+    "js": "javascript",
+    "reactjs": "react",
+    "react": "react",
+    "fastapi": "fastapi",
+    "python": "python",
+    "sql": "sql",
+    "postgres": "sql",
+    "postgresql": "sql",
+    "node": "node",
+    "nodejs": "node",
+    "redux": "state management",
+    "design": "design",
+    "ux": "design",
+    "ui": "design",
+    "api": "api",
+    "backend": "backend",
+    "frontend": "frontend",
+    "fullstack": "fullstack",
+}
+
+
+def clean_text(value: str) -> str:
+    if not value:
+        return ""
+    value = html_lib.unescape(value)
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+
+def get_site_name(url: str) -> str:
+    domain = urlparse(url).netloc.lower().replace("www.", "")
+    if "linkedin" in domain:
+        return "LinkedIn"
+    if "indeed" in domain:
+        return "Indeed"
+    if "naukri" in domain:
+        return "Naukri"
+    return domain.split(".")[0].replace("-", " ").title() if domain else "Company"
+
+
+def extract_job_details_from_html(html_content: str, source_url: str) -> dict:
+    text = html_lib.unescape(html_content or "")
+
+    title = ""
+    title_patterns = [
+        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+name=["\']twitter:title["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']title["\']',
+    ]
+    
+    title = title or "Job Opportunity"
+    company = company or get_site_name(source_url)
+    return {
+        "title": title.replace("- LinkedIn", "").replace("- Indeed", "").strip(),
+        "company": company,
+        "location": location,
+        "url": source_url,
+        "notes": f"Imported from {source_url}",
+    }
+
+
+def normalize_tokens(value: str) -> List[str]:
+    if not value:
+        return []
+    cleaned = value.lower().replace("&", " and ")
+    cleaned = re.sub(r"[^a-z0-9]+", " ", cleaned)
+    words = [word for word in cleaned.split() if word]
+    normalized = []
+    for word in words:
+        mapped = SYNONYMS.get(word, word)
+        # Some synonyms contain spaces, so split them into tokens too.
+        normalized.extend(mapped.split())
+    return normalized
+
+
+def serialize_job(doc: dict) -> dict:
+    job = dict(doc)
+    job["id"] = str(job.pop("_id", job.get("id", "")))
+    job.setdefault("title", "")
+    job.setdefault("company", "")
+    job.setdefault("location", "Remote")
+    job.setdefault("url", "")
+    job.setdefault("notes", "")
+    return job
+
+
+def init_db() -> None:
+    try:
+        client.admin.command("ping")
+        jobs_collection.create_index("title")
+        jobs_collection.create_index("company")
+    except Exception as exc:
+        # Keep startup available; database errors will be visible on endpoint use.
+        print(f"Database initialization warning: {exc}")
+
+
+@app.on_event("startup")
+def startup_event():
+    init_db()
+
+
+@app.get("/")
+def home():
+    return {"message": "Welcome to OneApply!"}
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/jobs", response_model=List[Job])
+def get_jobs():
+    rows = list(jobs_collection.find({}).sort("_id", DESCENDING))
+    return [serialize_job(row) for row in rows]
+
+
+@app.post("/jobs", response_model=Job)
+def create_job(job: JobCreate):
+    payload = {
+        "title": job.title,
+        "company": job.company,
+        "location": job.location,
+        "url": job.url,
+        "notes": job.notes,
+    }
+    result = jobs_collection.insert_one(payload)
+    payload["id"] = str(result.inserted_id)
+    return payload
+
+
+@app.post("/match", response_model=List[JobMatch])
+def match_jobs(profile: SkillProfile):
+    skills = []
+    for skill in profile.skills:
+        skills.extend(normalize_tokens(skill))
+    skills = sorted(set(skills))
+
+    if not skills:
+        return []
+
+    jobs = get_jobs()
+    matched_jobs = []
+
+    for job in jobs:
         combined_text = " ".join(
             str(job.get(field, "") or "")
             for field in ("title", "company", "location", "notes", "url")
@@ -29,7 +263,6 @@ def import_job_from_url(payload: JobImportRequest):
     url = payload.url.strip()
     if not url:
         raise HTTPException(status_code=400, detail="Job URL is required")
-
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise HTTPException(
