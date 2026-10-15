@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import "./index.css";
 
-const API_URL = "http://127.0.0.1:8000";
+const API_URL = "https://oneapply.onrender.com";
 
 function App() {
   const [jobs, setJobs] = useState([]);
@@ -321,3 +321,4 @@ function App() {
 }
 
 export default App;
+
