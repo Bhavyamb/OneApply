@@ -289,7 +289,15 @@ def match_jobs(profile: SkillProfile):
 
     for job in jobs:
         combined_text = " ".join(
-            [job["title"], job["company"], job["location"], job["notes"], job["url"]]
+           
+[
+    job.get("title", ""),
+    job.get("company", ""),
+    job.get("location", ""),
+    job.get("notes", ""),
+    job.get("url", "")
+]
+
         )
         job_tokens = set(normalize_tokens(combined_text))
         overlap = sorted(set(skills) & job_tokens)
