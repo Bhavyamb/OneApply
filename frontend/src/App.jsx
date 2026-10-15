@@ -16,6 +16,7 @@ function App() {
   const [matches, setMatches] = useState([])
   const [skillsInput, setSkillsInput] = useState(defaultSkills)
   const [form, setForm] = useState(initialForm)
+  const [jobUrlInput, setJobUrlInput] = useState('')
   const [resumeText, setResumeText] = useState('')
   const [selectedJobId, setSelectedJobId] = useState('')
   const [generatedLetter, setGeneratedLetter] = useState('')
@@ -104,6 +105,55 @@ function App() {
       await fetchMatches()
     } catch (error) {
       setMessage('Could not save the job. Check the backend server.')
+    }
+  }
+
+  const handleImportJobFromUrl = async () => {
+    const url = jobUrlInput.trim()
+    if (!url) {
+      setMessage('Paste a LinkedIn, Indeed, or Naukri job URL first.')
+      return
+    }
+
+    try {
+      const response = await fetch('http://127.0.0.1:8000/job-import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Could not import the job')
+      }
+
+      const importedJob = await response.json()
+      const payload = {
+        title: importedJob.title,
+        company: importedJob.company,
+        location: importedJob.location || 'Remote',
+        url: importedJob.url,
+        notes: importedJob.notes || `Imported from ${url}`,
+      }
+
+      const saveResponse = await fetch('http://127.0.0.1:8000/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+
+      if (!saveResponse.ok) {
+        throw new Error('Could not save imported job')
+      }
+
+      const savedJob = await saveResponse.json()
+      setJobs((current) => [savedJob, ...current])
+      setSelectedJobId(String(savedJob.id))
+      setForm((current) => ({ ...current, ...payload }))
+      setJobUrlInput('')
+      setMessage(`Imported: ${savedJob.title} at ${savedJob.company}`)
+      await fetchMatches()
+    } catch (error) {
+      setMessage('Could not import this job URL. Try pasting the job page link directly.')
     }
   }
 
@@ -256,6 +306,20 @@ function App() {
                 Save job
               </button>
             </form>
+
+            <div className="divider" />
+
+            <div className="profile-box">
+              <h3>Import from LinkedIn / Indeed / Naukri</h3>
+              <input
+                value={jobUrlInput}
+                onChange={(event) => setJobUrlInput(event.target.value)}
+                placeholder="https://www.linkedin.com/jobs/..."
+              />
+              <button className="secondary-btn profile-btn" type="button" onClick={handleImportJobFromUrl}>
+                Import job
+              </button>
+            </div>
 
             <div className="divider" />
 
