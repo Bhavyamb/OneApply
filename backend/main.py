@@ -1,7 +1,6 @@
 import html as html_lib
 import os
 import re
-import sqlite3
 from typing import List
 from urllib.parse import urlparse
 
@@ -9,9 +8,14 @@ import requests
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from pymongo import MongoClient
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-DB_PATH = os.getenv("DB_PATH", "jobs.db")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "OneApply")
+
+client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+db = client[MONGO_DB_NAME]
+jobs_collection = db["jobs"]
 
 allowed_origins = [
     origin.strip()
@@ -43,7 +47,7 @@ class JobCreate(BaseModel):
 
 
 class Job(JobCreate):
-    id: int
+    id: str
 
 
 class SkillProfile(BaseModel):
@@ -209,53 +213,25 @@ def normalize_tokens(value: str):
     return normalized
 
 
-def get_db_connection():
-    if DATABASE_URL:
-        try:
-            import psycopg
-            from psycopg.rows import dict_row
+def serialize_job(doc):
+    if not doc:
+        return None
+    job = dict(doc)
+    job["id"] = str(job.pop("_id"))
+    return job
 
-            return psycopg.connect(DATABASE_URL, row_factory=dict_row)
-        except Exception as exc:
-            raise RuntimeError(f"PostgreSQL connection failed: {exc}") from exc
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def get_jobs_collection():
+    return jobs_collection
 
 
 def init_db():
-    conn = get_db_connection()
-    if DATABASE_URL:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS jobs (
-                id BIGSERIAL PRIMARY KEY,
-                title TEXT NOT NULL,
-                company TEXT NOT NULL,
-                location TEXT NOT NULL,
-                url TEXT,
-                notes TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-    else:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS jobs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                company TEXT NOT NULL,
-                location TEXT NOT NULL,
-                url TEXT,
-                notes TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-    conn.commit()
-    conn.close()
+    try:
+        client.admin.command("ping")
+        jobs_collection.create_index("title")
+        jobs_collection.create_index("company")
+    except Exception:
+        pass
 
 
 @app.on_event("startup")
@@ -275,59 +251,22 @@ def health():
 
 @app.get("/jobs", response_model=List[Job])
 def get_jobs():
-    conn = get_db_connection()
-    rows = conn.execute(
-        "SELECT id, title, company, location, url, notes FROM jobs ORDER BY id DESC"
-    ).fetchall()
-    conn.close()
-
-    return [
-        {
-            "id": row["id"],
-            "title": row["title"],
-            "company": row["company"],
-            "location": row["location"],
-            "url": row["url"],
-            "notes": row["notes"],
-        }
-        for row in rows
-    ]
+    rows = list(jobs_collection.find({}).sort("_id", -1))
+    return [serialize_job(row) for row in rows]
 
 
 @app.post("/jobs", response_model=Job)
 def create_job(job: JobCreate):
-    conn = get_db_connection()
-    if DATABASE_URL:
-        placeholder = "%s"
-        cursor = conn.execute(
-            f"""
-            INSERT INTO jobs (title, company, location, url, notes)
-            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-            RETURNING id
-            """,
-            (job.title, job.company, job.location, job.url, job.notes),
-        )
-        job_id = cursor.fetchone()["id"]
-    else:
-        cursor = conn.execute(
-            """
-            INSERT INTO jobs (title, company, location, url, notes)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (job.title, job.company, job.location, job.url, job.notes),
-        )
-        job_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-
-    return {
-        "id": job_id,
+    payload = {
         "title": job.title,
         "company": job.company,
         "location": job.location,
         "url": job.url,
         "notes": job.notes,
     }
+    result = jobs_collection.insert_one(payload)
+    payload["id"] = str(result.inserted_id)
+    return payload
 
 
 @app.post("/match", response_model=List[JobMatch])
