@@ -2,13 +2,17 @@ import html as html_lib
 import os
 import re
 from typing import List
+from fastapi.middleware.cors import CORSMiddleware
 from urllib.parse import urlparse
 
 import requests
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pymongo import MongoClient
+
+load_dotenv()
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "OneApply")

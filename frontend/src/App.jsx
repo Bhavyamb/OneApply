@@ -1,207 +1,106 @@
-import { useEffect, useState } from 'react'
-import './App.css'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+import { useEffect, useState } from "react";
+import "./index.css";
 
-const initialForm = {
-  title: '',
-  company: '',
-  location: 'Remote',
-  url: '',
-  notes: '',
-}
-
-const defaultSkills = 'React, Python, FastAPI, SQL, JavaScript'
+const API_URL = "http://127.0.0.1:8000";
 
 function App() {
-  const [jobs, setJobs] = useState([])
-  const [matches, setMatches] = useState([])
-  const [skillsInput, setSkillsInput] = useState(defaultSkills)
-  const [form, setForm] = useState(initialForm)
-  const [jobUrlInput, setJobUrlInput] = useState('')
-  const [resumeText, setResumeText] = useState('')
-  const [selectedJobId, setSelectedJobId] = useState('')
-  const [generatedLetter, setGeneratedLetter] = useState('')
-  const [message, setMessage] = useState('')
+  const [jobs, setJobs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [skills, setSkills] = useState("Python, FastAPI, SQL");
+  const [matchedJobs, setMatchedJobs] = useState([]);
+  const [matching, setMatching] = useState(false);
 
-  const fetchJobs = async () => {
+  const [form, setForm] = useState({
+    title: "",
+    company: "",
+    location: "Bengaluru",
+    url: "",
+    notes: "",
+  });
+
+  async function loadJobs() {
     try {
-      const response = await fetch(`${API_BASE_URL}/jobs`)
-      const data = await response.json()
-      setJobs(data)
-      if (data.length && !selectedJobId) {
-        setSelectedJobId(String(data[0].id))
-      }
-      return data
-    } catch (error) {
-      setMessage('Backend is not running. Start the FastAPI server first.')
-      return []
-    }
-  }
+      setError("");
+      const response = await fetch(`${API_URL}/jobs`);
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
 
-  const fetchMatches = async (skills = skillsInput) => {
-    const parsedSkills = skills
-      .split(',')
-      .map((skill) => skill.trim())
-      .filter(Boolean)
-
-    if (!parsedSkills.length) {
-      setMatches([])
-      return
-    }
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/match`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skills: parsedSkills }),
-      })
-
-      if (!response.ok) {
-        throw new Error('Unable to calculate matches')
-      }
-
-      const data = await response.json()
-      setMatches(data)
-      const topMatch = data[0]
-      setMessage(topMatch ? `Top match: ${topMatch.title} (${topMatch.match_score}%)` : 'No strong matches yet.')
-    } catch (error) {
-      setMessage('Could not calculate matches. Check the backend server.')
+      const data = await response.json();
+      setJobs(data);
+    } catch (err) {
+      setError(err.message || "Unable to load jobs.");
+    } finally {
+      setLoading(false);
     }
   }
 
   useEffect(() => {
-    const loadData = async () => {
-      const savedJobs = await fetchJobs()
-      if (savedJobs.length) {
-        await fetchMatches(defaultSkills)
-      }
-    }
-    loadData()
-  }, [])
+    loadJobs();
+  }, []);
 
-  const handleChange = (event) => {
-    const { name, value } = event.target
-    setForm((current) => ({ ...current, [name]: value }))
-  }
-
-  const handleSubmit = async (event) => {
-    event.preventDefault()
+  async function addJob(event) {
+    event.preventDefault();
+    setMessage("");
 
     try {
-      const response = await fetch(`${API_BASE_URL}/jobs`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const response = await fetch(`${API_URL}/jobs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
-      })
+      });
 
       if (!response.ok) {
-        throw new Error('Unable to save job')
+        const details = await response.text();
+        throw new Error(details || `Request failed: ${response.status}`);
       }
 
-      const savedJob = await response.json()
-      setJobs((current) => [savedJob, ...current])
-      setSelectedJobId(String(savedJob.id))
-      setForm(initialForm)
-      setMessage(`Saved: ${savedJob.title} at ${savedJob.company}`)
-      await fetchMatches()
-    } catch (error) {
-      setMessage('Could not save the job. Check the backend server.')
+      setForm({
+        title: "",
+        company: "",
+        location: "Bengaluru",
+        url: "",
+        notes: "",
+      });
+
+      setMessage("Job added successfully.");
+      await loadJobs();
+    } catch (err) {
+      setMessage(`Could not add job: ${err.message}`);
     }
   }
 
-  const handleImportJobFromUrl = async () => {
-    const url = jobUrlInput.trim()
-    if (!url) {
-      setMessage('Paste a LinkedIn, Indeed, or Naukri job URL first.')
-      return
-    }
+  async function findMatches() {
+    setMatching(true);
+    setMessage("");
 
     try {
-      const response = await fetch(`${API_BASE_URL}/job-import`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
-      })
-
-      if (!response.ok) {
-        throw new Error('Could not import the job')
-      }
-
-      const importedJob = await response.json()
-      const payload = {
-        title: importedJob.title,
-        company: importedJob.company,
-        location: importedJob.location || 'Remote',
-        url: importedJob.url,
-        notes: importedJob.notes || `Imported from ${url}`,
-      }
-
-      const saveResponse = await fetch(`${API_BASE_URL}/jobs`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-
-      if (!saveResponse.ok) {
-        throw new Error('Could not save imported job')
-      }
-
-      const savedJob = await saveResponse.json()
-      setJobs((current) => [savedJob, ...current])
-      setSelectedJobId(String(savedJob.id))
-      setForm((current) => ({ ...current, ...payload }))
-      setJobUrlInput('')
-      setMessage(`Imported: ${savedJob.title} at ${savedJob.company}`)
-      await fetchMatches()
-    } catch (error) {
-      setMessage('Could not import this job URL. Try pasting the job page link directly.')
-    }
-  }
-
-  const handleResumeUpload = async (event) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    const text = await file.text()
-    setResumeText(text)
-    setMessage(`Loaded resume: ${file.name}`)
-  }
-
-  const handleGenerateLetter = async () => {
-    const selectedJob = jobs.find((job) => String(job.id) === selectedJobId) || jobs[0]
-
-    if (!selectedJob || !resumeText.trim()) {
-      setMessage('Add a saved job and paste your resume text before generating a cover letter.')
-      return
-    }
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/cover-letter`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const response = await fetch(`${API_URL}/match`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          resume_text: resumeText,
-          job_title: selectedJob.title,
-          company: selectedJob.company,
-          candidate_name: 'Your Name',
+          skills: skills.split(",").map((skill) => skill.trim()).filter(Boolean),
         }),
-      })
+      });
 
-      if (!response.ok) {
-        throw new Error('Unable to generate cover letter')
-      }
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
 
-      const data = await response.json()
-      setGeneratedLetter(data.cover_letter)
-      setMessage(`Draft ready for ${selectedJob.company}`)
-    } catch (error) {
-      setMessage('Cover letter generation failed. Check the backend server.')
+      const data = await response.json();
+      setMatchedJobs(Array.isArray(data) ? data : data.jobs || []);
+      setMessage("Job matching completed.");
+    } catch (err) {
+      setMessage(`Could not match jobs: ${err.message}`);
+    } finally {
+      setMatching(false);
     }
   }
 
-  const matchMap = Object.fromEntries(matches.map((job) => [job.id, job.match_score]))
-  const topScore = matches[0]?.match_score ?? 0
+  const statCards = [
+    { label: "Available jobs", value: jobs.length },
+    { label: "Locations", value: new Set(jobs.map((job) => job.location).filter(Boolean)).size },
+    { label: "With application links", value: jobs.filter((job) => job.url).length },
+  ];
 
   return (
     <div className="app-shell">
@@ -210,183 +109,215 @@ function App() {
           <span className="brand-mark">O</span>
           <span>OneApply</span>
         </div>
+
         <nav className="nav">
           <a href="#dashboard">Dashboard</a>
           <a href="#jobs">Jobs</a>
+          <a href="#profile">Skills</a>
           <a href="#add-job">Add job</a>
         </nav>
-        <button className="primary-btn">Add job</button>
+
+        <a className="primary-btn" href="#jobs">Explore jobs</a>
       </header>
 
       <main className="dashboard" id="dashboard">
         <section className="hero">
-          <div>
-            <p className="eyebrow">Career dashboard</p>
-            <h1>Apply smarter, not harder.</h1>
-            <p className="subtitle">
-              Keep every opportunity in one place and track your strongest job matches.
-            </p>
-            <div className="hero-actions">
-              <button className="primary-btn">View matches</button>
-              <button className="secondary-btn">Upload resume</button>
-            </div>
+          <p className="eyebrow">Your career, organized</p>
+          <h1>Your next chapter starts here.</h1>
+          <p className="subtitle">
+            Keep track of opportunities, discover relevant roles, and organize
+            your job search in one place.
+          </p>
+
+          <div className="hero-actions">
+            <a className="primary-btn" href="#jobs">View opportunities</a>
+            <a className="secondary-btn" href="#add-job">Add a job</a>
           </div>
         </section>
 
-        <section className="stats-grid">
-          <article className="stat-card">
-            <p>Jobs tracked</p>
-            <strong>{jobs.length}</strong>
-          </article>
-          <article className="stat-card">
-            <p>Skill matches</p>
-            <strong>{topScore}%</strong>
-          </article>
-          <article className="stat-card">
-            <p>Interviews</p>
-            <strong>3</strong>
-          </article>
+        <section className="stats-grid" aria-label="Job statistics">
+          {statCards.map((stat) => (
+            <article className="stat-card" key={stat.label}>
+              <p>{stat.label}</p>
+              <strong>{loading ? "—" : stat.value}</strong>
+            </article>
+          ))}
         </section>
 
-        <section className="content-grid" id="jobs">
-          <div className="panel">
+        <div className="content-grid">
+          <section className="panel" id="jobs">
             <div className="panel-header">
-              <h2>Saved jobs</h2>
+              <h2>Recent opportunities</h2>
               <span>{jobs.length} total</span>
             </div>
-            <ul className="job-list">
-              {jobs.length === 0 ? (
-                <li className="empty-state">No jobs saved yet. Add your first role.</li>
-              ) : (
-                jobs.map((job) => (
-                  <li key={job.id}>
-                    <div>
-                      <h3>{job.title}</h3>
-                      <p>
-                        {job.company} · {job.location}
-                      </p>
-                    </div>
-                    <strong>{matchMap[job.id] ? `${matchMap[job.id]}% match` : 'Saved'}</strong>
-                  </li>
-                ))
-              )}
-            </ul>
-          </div>
 
-          <aside className="panel side-panel" id="add-job">
+            {loading && <p className="empty-state">Loading jobs...</p>}
+
+            {error && (
+              <div className="empty-state">
+                <p>{error}</p>
+                <button className="secondary-btn" onClick={loadJobs}>
+                  Try again
+                </button>
+              </div>
+            )}
+
+            {!loading && !error && jobs.length === 0 && (
+              <p className="empty-state">No jobs yet. Add your first opportunity.</p>
+            )}
+
+            <ul className="job-list">
+              {jobs.map((job) => (
+                <li key={job.id}>
+                  <div>
+                    <h3>{job.title}</h3>
+                    <p>{job.company} · {job.location || "Location not specified"}</p>
+                    {job.notes && <p>{job.notes}</p>}
+                  </div>
+
+                  {job.url ? (
+                    <a
+                      href={job.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="secondary-btn"
+                    >
+                      Open ↗
+                    </a>
+                  ) : (
+                    <span className="job-link-unavailable">No link</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section className="panel" id="add-job">
             <div className="panel-header">
-              <h2>Add a job</h2>
+              <h2>Add opportunity</h2>
+              <span>Save to your list</span>
             </div>
 
-            <form className="job-form" onSubmit={handleSubmit}>
+            <form className="job-form" onSubmit={addJob}>
               <label>
                 Job title
-                <input name="title" value={form.title} onChange={handleChange} required />
+                <input
+                  required
+                  value={form.title}
+                  onChange={(e) => setForm({ ...form, title: e.target.value })}
+                  placeholder="Python Developer"
+                />
               </label>
 
               <label>
                 Company
-                <input name="company" value={form.company} onChange={handleChange} required />
+                <input
+                  required
+                  value={form.company}
+                  onChange={(e) => setForm({ ...form, company: e.target.value })}
+                  placeholder="Company name"
+                />
               </label>
 
               <label>
                 Location
-                <input name="location" value={form.location} onChange={handleChange} />
+                <input
+                  value={form.location}
+                  onChange={(e) => setForm({ ...form, location: e.target.value })}
+                  placeholder="Bengaluru / Remote"
+                />
               </label>
 
               <label>
-                Job link
-                <input name="url" value={form.url} onChange={handleChange} placeholder="https://..." />
+                Job URL
+                <input
+                  type="url"
+                  value={form.url}
+                  onChange={(e) => setForm({ ...form, url: e.target.value })}
+                  placeholder="https://..."
+                />
               </label>
 
               <label>
                 Notes
-                <textarea name="notes" value={form.notes} onChange={handleChange} rows="4" />
+                <textarea
+                  rows="3"
+                  value={form.notes}
+                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                  placeholder="Requirements or reminders"
+                />
               </label>
 
               <button className="primary-btn submit-btn" type="submit">
-                Save job
+                Save opportunity
               </button>
             </form>
+          </section>
 
-            <div className="divider" />
-
-            <div className="profile-box">
-              <h3>Import from LinkedIn / Indeed / Naukri</h3>
-              <input
-                value={jobUrlInput}
-                onChange={(event) => setJobUrlInput(event.target.value)}
-                placeholder="https://www.linkedin.com/jobs/..."
-              />
-              <button className="secondary-btn profile-btn" type="button" onClick={handleImportJobFromUrl}>
-                Import job
-              </button>
+          <section className="panel" id="profile">
+            <div className="panel-header">
+              <h2>Skills & job matching</h2>
+              <span>Find relevant roles</span>
             </div>
 
-            <div className="divider" />
-
             <div className="profile-box">
-              <h3>Your profile skills</h3>
-              <textarea
-                value={skillsInput}
-                onChange={(event) => setSkillsInput(event.target.value)}
-                rows="3"
-                placeholder="React, Python, SQL, FastAPI"
-              />
-              <button
-                className="secondary-btn profile-btn"
-                type="button"
-                onClick={() => fetchMatches()}
-              >
-                Match jobs
-              </button>
-            </div>
-
-            <div className="divider" />
-
-            <div className="resume-box">
-              <h3>Resume + cover letter</h3>
-
-              <label className="file-label">
-                Upload resume (.txt or .md)
-                <input type="file" accept=".txt,.md" onChange={handleResumeUpload} />
+              <label>
+                Your skills (comma-separated)
+                <textarea
+                  rows="3"
+                  value={skills}
+                  onChange={(e) => setSkills(e.target.value)}
+                  placeholder="Python, SQL, FastAPI"
+                />
               </label>
 
-              <textarea
-                value={resumeText}
-                onChange={(event) => setResumeText(event.target.value)}
-                rows="8"
-                placeholder="Paste or upload your resume text here..."
-              />
-
-              {jobs.length > 0 && (
-                <select value={selectedJobId} onChange={(event) => setSelectedJobId(event.target.value)}>
-                  {jobs.map((job) => (
-                    <option key={job.id} value={job.id}>
-                      {job.title} at {job.company}
-                    </option>
-                  ))}
-                </select>
-              )}
-
-              <button className="primary-btn profile-btn" type="button" onClick={handleGenerateLetter}>
-                Generate cover letter
+              <button
+                className="primary-btn profile-btn"
+                onClick={findMatches}
+                disabled={matching}
+              >
+                {matching ? "Matching..." : "Find matching jobs"}
               </button>
+
+              {matchedJobs.length > 0 && (
+                <ul className="job-list">
+                  {matchedJobs.map((job) => (
+                    <li key={job.id}>
+                      <div>
+                        <h3>{job.title}</h3>
+                        <p>{job.company}</p>
+                      </div>
+                      {job.match_score !== undefined && (
+                        <strong>{job.match_score}%</strong>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
+          </section>
 
-            {generatedLetter && (
-              <div className="letter-box">
-                <h4>Draft cover letter</h4>
-                <pre>{generatedLetter}</pre>
-              </div>
-            )}
+          <section className="panel">
+            <div className="panel-header">
+              <h2>Stay organized</h2>
+              <span>Quick overview</span>
+            </div>
+            <p className="empty-state">
+              Save job links and notes, review your opportunities, and keep your
+              skills ready for your next application.
+            </p>
+            <a className="secondary-btn" href="#add-job">Add an opportunity</a>
+          </section>
+        </div>
 
-            {message && <p className="status-message">{message}</p>}
-          </aside>
-        </section>
+        {message && <p className="status-message" role="status">{message}</p>}
+
+        <footer className="status-message">
+          OneApply · Your job search, organized.
+        </footer>
       </main>
     </div>
-  )
+  );
 }
 
-export default App
+export default App;
