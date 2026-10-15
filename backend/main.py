@@ -1,4 +1,5 @@
 import html as html_lib
+import os
 import re
 import sqlite3
 from typing import List
@@ -9,13 +10,24 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-DB_PATH = "jobs.db"
+DATABASE_URL = os.getenv("DATABASE_URL")
+DB_PATH = os.getenv("DB_PATH", "jobs.db")
+
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,https://bhavyamb.github.io",
+    ).split(",")
+    if origin.strip()
+]
 
 app = FastAPI(title="OneApply API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"https://.*\.github\.io",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -198,6 +210,15 @@ def normalize_tokens(value: str):
 
 
 def get_db_connection():
+    if DATABASE_URL:
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+
+            return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+        except Exception as exc:
+            raise RuntimeError(f"PostgreSQL connection failed: {exc}") from exc
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -205,19 +226,34 @@ def get_db_connection():
 
 def init_db():
     conn = get_db_connection()
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS jobs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            company TEXT NOT NULL,
-            location TEXT NOT NULL,
-            url TEXT,
-            notes TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    if DATABASE_URL:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS jobs (
+                id BIGSERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                company TEXT NOT NULL,
+                location TEXT NOT NULL,
+                url TEXT,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
         )
-        """
-    )
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                company TEXT NOT NULL,
+                location TEXT NOT NULL,
+                url TEXT,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
     conn.commit()
     conn.close()
 
@@ -261,15 +297,27 @@ def get_jobs():
 @app.post("/jobs", response_model=Job)
 def create_job(job: JobCreate):
     conn = get_db_connection()
-    cursor = conn.execute(
-        """
-        INSERT INTO jobs (title, company, location, url, notes)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (job.title, job.company, job.location, job.url, job.notes),
-    )
+    if DATABASE_URL:
+        placeholder = "%s"
+        cursor = conn.execute(
+            f"""
+            INSERT INTO jobs (title, company, location, url, notes)
+            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+            RETURNING id
+            """,
+            (job.title, job.company, job.location, job.url, job.notes),
+        )
+        job_id = cursor.fetchone()["id"]
+    else:
+        cursor = conn.execute(
+            """
+            INSERT INTO jobs (title, company, location, url, notes)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (job.title, job.company, job.location, job.url, job.notes),
+        )
+        job_id = cursor.lastrowid
     conn.commit()
-    job_id = cursor.lastrowid
     conn.close()
 
     return {

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import './App.css'
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+
 const initialForm = {
   title: '',
   company: '',
@@ -24,7 +26,7 @@ function App() {
 
   const fetchJobs = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:8000/jobs')
+      const response = await fetch(`${API_BASE_URL}/jobs`)
       const data = await response.json()
       setJobs(data)
       if (data.length && !selectedJobId) {
@@ -49,7 +51,7 @@ function App() {
     }
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/match', {
+      const response = await fetch(`${API_BASE_URL}/match`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ skills: parsedSkills }),
@@ -87,7 +89,7 @@ function App() {
     event.preventDefault()
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/jobs', {
+      const response = await fetch(`${API_BASE_URL}/jobs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
@@ -116,7 +118,7 @@ function App() {
     }
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/job-import', {
+      const response = await fetch(`${API_BASE_URL}/job-import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url }),
@@ -135,7 +137,7 @@ function App() {
         notes: importedJob.notes || `Imported from ${url}`,
       }
 
-      const saveResponse = await fetch('http://127.0.0.1:8000/jobs', {
+      const saveResponse = await fetch(`${API_BASE_URL}/jobs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -175,7 +177,7 @@ function App() {
     }
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/cover-letter', {
+      const response = await fetch(`${API_BASE_URL}/cover-letter`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
