@@ -1,4 +1,4 @@
-
+﻿
 import { useEffect, useState } from "react";
 
 const API_URL = "https://oneapply.onrender.com";
@@ -15,7 +15,14 @@ const emptyResume = {
   projects: "",
 };
 
-// Keep Field outside App to prevent input focus from being lost.
+const resumeSections = [
+  ["Professional Summary", "summary"],
+  ["Experience", "experience"],
+  ["Projects", "projects"],
+  ["Skills", "skills"],
+  ["Education", "education"],
+];
+
 function Field({
   label,
   name,
@@ -29,7 +36,10 @@ function Field({
 
   return (
     <div>
-      <label className="mb-1 block text-sm font-medium text-gray-700" htmlFor={name}>
+      <label
+        className="mb-1 block text-sm font-medium text-gray-700"
+        htmlFor={name}
+      >
         {label}
       </label>
 
@@ -74,11 +84,16 @@ function App() {
     }
   });
 
+  const [resumeTemplate, setResumeTemplate] = useState(() => {
+    return localStorage.getItem("oneapply_resume_template") || "classic";
+  });
+
   const [pdf, setPdf] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState("");
   const [savingResume, setSavingResume] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
+  const [loadingResume, setLoadingResume] = useState(true);
 
   const [jobTitle, setJobTitle] = useState("");
   const [company, setCompany] = useState("");
@@ -93,6 +108,7 @@ function App() {
   const buttonClass =
     "rounded-lg bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60";
 
+  // Load dashboard jobs.
   useEffect(() => {
     async function fetchJobs() {
       try {
@@ -103,6 +119,7 @@ function App() {
         }
 
         const data = await response.json();
+
         setJobs(Array.isArray(data) ? data : []);
       } catch (err) {
         setError(err.message || "Could not load jobs.");
@@ -114,9 +131,61 @@ function App() {
     fetchJobs();
   }, []);
 
+  // Load saved resume details from MongoDB.
+  // Browser data remains available if the server cannot be reached.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchResume() {
+      try {
+        const response = await fetch(`${API_URL}/resume`);
+
+        if (!response.ok) {
+          throw new Error("Could not load the saved resume.");
+        }
+
+        const data = await response.json();
+
+        if (!cancelled && data.resume) {
+          const serverResume = {
+            ...emptyResume,
+            ...data.resume,
+          };
+
+          setResume((current) => ({
+            ...current,
+            ...serverResume,
+          }));
+
+          localStorage.setItem(
+            "oneapply_resume",
+            JSON.stringify(serverResume)
+          );
+        }
+      } catch {
+        // Keep the locally saved resume if the server is unavailable.
+      } finally {
+        if (!cancelled) {
+          setLoadingResume(false);
+        }
+      }
+    }
+
+    fetchResume();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   function updateResume(event) {
     const { name, value } = event.target;
-    setResume((current) => ({ ...current, [name]: value }));
+
+    setResume((current) => ({
+      ...current,
+      [name]: value,
+    }));
+
     setSaveMessage("");
   }
 
@@ -125,23 +194,30 @@ function App() {
     setSavingResume(true);
     setSaveMessage("");
 
-    // Keep a local copy even if the server request fails.
+    // Save locally first so the details remain available in this browser.
     localStorage.setItem("oneapply_resume", JSON.stringify(resume));
+    localStorage.setItem("oneapply_resume_template", resumeTemplate);
 
     try {
       const response = await fetch(`${API_URL}/resume`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify(resume),
       });
 
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(data.detail || "Could not save resume to the server.");
+        throw new Error(
+          data.detail || "Could not save resume to the server."
+        );
       }
 
-      setSaveMessage("Resume saved successfully to the server and this browser.");
+      setSaveMessage(
+        "Resume saved successfully to MongoDB and this browser."
+      );
     } catch (err) {
       setSaveMessage(
         `Saved in this browser, but server saving failed: ${err.message}`
@@ -179,7 +255,9 @@ function App() {
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(data.detail || `Upload failed (${response.status}).`);
+        throw new Error(
+          data.detail || `Upload failed (${response.status}).`
+        );
       }
 
       if (data.resume_text) {
@@ -189,9 +267,7 @@ function App() {
         }));
       }
 
-      setUploadMessage(
-        data.message || "PDF uploaded successfully."
-      );
+      setUploadMessage(data.message || "PDF uploaded successfully.");
     } catch (err) {
       setUploadMessage(
         `Upload failed: ${err.message}. Check that the deployed backend has the /resume/upload endpoint.`
@@ -209,12 +285,14 @@ function App() {
 
     try {
       const resumeText = Object.values(resume)
-        .filter(Boolean)
+        .filter((value) => typeof value === "string" && value.trim())
         .join("\n");
 
       const response = await fetch(`${API_URL}/cover-letter`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           resume_text: resumeText,
           job_title: jobTitle,
@@ -226,7 +304,9 @@ function App() {
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(data.detail || "Could not generate the cover letter.");
+        throw new Error(
+          data.detail || "Could not generate the cover letter."
+        );
       }
 
       const result =
@@ -252,6 +332,25 @@ function App() {
       alert("Copy failed. Please select the text and copy it manually.");
     }
   }
+
+  function printResume() {
+    document.body.classList.add("printing-resume");
+
+    const cleanup = () => {
+      document.body.classList.remove("printing-resume");
+      window.removeEventListener("afterprint", cleanup);
+    };
+
+    window.addEventListener("afterprint", cleanup);
+    window.print();
+  }
+
+  const templateHeaderClass =
+    resumeTemplate === "modern"
+      ? "border-indigo-600"
+      : resumeTemplate === "minimal"
+        ? "border-gray-300"
+        : "border-gray-900";
 
   return (
     <main className="min-h-screen bg-gray-100 text-gray-900">
@@ -325,7 +424,7 @@ function App() {
 
                   <p className="mt-2 text-gray-700">
                     {job.company}
-                    {job.location ? ` · ${job.location}` : ""}
+                    {job.location ? ` Â· ${job.location}` : ""}
                   </p>
 
                   {job.description && (
@@ -357,7 +456,7 @@ function App() {
                     }}
                     className="mt-5 text-sm font-semibold text-indigo-700 hover:underline"
                   >
-                    Create cover letter →
+                    Create cover letter â†’
                   </button>
                 </article>
               ))}
@@ -370,8 +469,15 @@ function App() {
             <div className="rounded-xl border bg-white p-6 shadow-sm">
               <h2 className="text-2xl font-bold">Resume Builder</h2>
               <p className="mb-6 mt-2 text-sm text-gray-500">
-                Enter your details, save them to the server and preview your resume.
+                Edit your details, choose a template, and save or export your
+                resume.
               </p>
+
+              {loadingResume && (
+                <p className="mb-4 text-sm text-gray-500">
+                  Checking for a saved resume...
+                </p>
+              )}
 
               <form onSubmit={saveResume} className="space-y-4">
                 <Field
@@ -418,20 +524,20 @@ function App() {
                 />
 
                 <Field
-                  label="Education"
-                  name="education"
-                  placeholder="Degree, college, graduation year"
-                  multiline
-                  value={resume.education}
-                  onChange={updateResume}
-                />
-
-                <Field
                   label="Experience"
                   name="experience"
                   placeholder="Role, company, dates and key achievements"
                   multiline
                   value={resume.experience}
+                  onChange={updateResume}
+                />
+
+                <Field
+                  label="Projects"
+                  name="projects"
+                  placeholder="Project names, technologies and outcomes"
+                  multiline
+                  value={resume.projects}
                   onChange={updateResume}
                 />
 
@@ -445,11 +551,11 @@ function App() {
                 />
 
                 <Field
-                  label="Projects"
-                  name="projects"
-                  placeholder="Project names, technologies and outcomes"
+                  label="Education"
+                  name="education"
+                  placeholder="Degree, college, graduation year"
                   multiline
-                  value={resume.projects}
+                  value={resume.education}
                   onChange={updateResume}
                 />
 
@@ -464,7 +570,7 @@ function App() {
 
                   <button
                     type="button"
-                    onClick={() => window.print()}
+                    onClick={printResume}
                     className="rounded-lg border border-gray-300 px-4 py-2.5 font-semibold hover:bg-gray-50"
                   >
                     Print / Save as PDF
@@ -472,7 +578,11 @@ function App() {
                 </div>
 
                 {saveMessage && (
-                  <p className="break-words text-sm" role="status">
+                  <p
+                    className="break-words text-sm"
+                    role="status"
+                    aria-live="polite"
+                  >
                     {saveMessage}
                   </p>
                 )}
@@ -522,36 +632,91 @@ function App() {
                 </form>
               </div>
 
-              <div className="resume-preview rounded-xl border bg-white p-6 shadow-sm">
-                <p className="mb-3 text-xs font-bold uppercase tracking-widest text-indigo-600">
-                  Resume preview
-                </p>
+              <div
+                className={`resume-preview rounded-xl border bg-white p-6 shadow-sm ${
+                  resumeTemplate === "minimal"
+                    ? "font-sans text-gray-700"
+                    : "font-sans text-gray-900"
+                }`}
+              >
+                <div className="mb-5 print:hidden">
+                  <label
+                    htmlFor="resumeTemplate"
+                    className="mb-2 block text-sm font-semibold text-gray-700"
+                  >
+                    Choose resume template
+                  </label>
 
-                <h2 className="text-2xl font-bold">
-                  {resume.name || "Your Name"}
-                </h2>
+                  <select
+                    id="resumeTemplate"
+                    value={resumeTemplate}
+                    onChange={(event) => {
+                      const selected = event.target.value;
+                      setResumeTemplate(selected);
+                      localStorage.setItem(
+                        "oneapply_resume_template",
+                        selected
+                      );
+                    }}
+                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5"
+                  >
+                    <option value="classic">Classic ATS</option>
+                    <option value="modern">Modern Professional</option>
+                    <option value="minimal">Minimal</option>
+                  </select>
 
-                <p className="mt-1 break-words text-sm text-gray-600">
-                  {[resume.email, resume.phone, resume.location]
-                    .filter(Boolean)
-                    .join(" · ") || "Email · Phone · Location"}
-                </p>
+                  <p className="mt-2 text-xs text-gray-500">
+                    Your selected template is remembered in this browser.
+                  </p>
+                </div>
 
-                {[
-                  ["Professional Summary", resume.summary],
-                  ["Education", resume.education],
-                  ["Experience", resume.experience],
-                  ["Skills", resume.skills],
-                  ["Projects", resume.projects],
-                ].map(([heading, value]) =>
-                  value ? (
-                    <div key={heading} className="mt-5">
-                      <h3 className="border-b pb-1 font-bold">{heading}</h3>
-                      <p className="mt-2 whitespace-pre-line text-sm leading-6 text-gray-700">
-                        {value}
+                <div
+                  className={`border-b-2 pb-4 ${templateHeaderClass}`}
+                >
+                  <h2
+                    className={`break-words font-bold ${
+                      resumeTemplate === "modern"
+                        ? "text-3xl text-indigo-700"
+                        : "text-2xl text-gray-900"
+                    }`}
+                  >
+                    {resume.name || "Your Name"}
+                  </h2>
+
+                  <p className="mt-2 break-words text-sm leading-6 text-gray-600">
+                    {[resume.email, resume.phone, resume.location]
+                      .filter(Boolean)
+                      .join(" | ") || "Email | Phone | Location"}
+                  </p>
+                </div>
+
+                {resumeSections.map(([heading, key]) =>
+                  resume[key]?.trim() ? (
+                    <section key={key} className="mt-5">
+                      <h3
+                        className={`mb-2 border-b pb-1 text-sm font-bold uppercase tracking-wide ${
+                          resumeTemplate === "modern"
+                            ? "border-indigo-200 text-indigo-700"
+                            : resumeTemplate === "minimal"
+                              ? "border-gray-200 text-gray-700"
+                              : "border-gray-400 text-gray-900"
+                        }`}
+                      >
+                        {heading}
+                      </h3>
+
+                      <p className="whitespace-pre-line break-words text-sm leading-6">
+                        {resume[key]}
                       </p>
-                    </div>
+                    </section>
                   ) : null
+                )}
+
+                {!resumeSections.some(([, key]) => resume[key]?.trim()) && (
+                  <p className="mt-5 text-sm text-gray-400">
+                    Your summary, experience, projects, skills, and education
+                    will appear here as you fill them in.
+                  </p>
                 )}
               </div>
             </div>
@@ -567,7 +732,10 @@ function App() {
 
             <form onSubmit={generateCoverLetter} className="space-y-4">
               <div>
-                <label className="mb-1 block text-sm font-medium" htmlFor="jobTitle">
+                <label
+                  className="mb-1 block text-sm font-medium"
+                  htmlFor="jobTitle"
+                >
                   Job title
                 </label>
                 <input
@@ -581,7 +749,10 @@ function App() {
               </div>
 
               <div>
-                <label className="mb-1 block text-sm font-medium" htmlFor="company">
+                <label
+                  className="mb-1 block text-sm font-medium"
+                  htmlFor="company"
+                >
                   Company
                 </label>
                 <input
@@ -595,7 +766,10 @@ function App() {
               </div>
 
               <div>
-                <label className="mb-1 block text-sm font-medium" htmlFor="jobDescription">
+                <label
+                  className="mb-1 block text-sm font-medium"
+                  htmlFor="jobDescription"
+                >
                   Job description
                 </label>
                 <textarea
@@ -624,7 +798,10 @@ function App() {
 
             {coverLetter && (
               <div className="mt-6">
-                <label className="mb-2 block font-semibold" htmlFor="coverResult">
+                <label
+                  className="mb-2 block font-semibold"
+                  htmlFor="coverResult"
+                >
                   Generated cover letter
                 </label>
 
@@ -661,22 +838,34 @@ function App() {
 
       <style>{`
         @media print {
-          body * {
-            visibility: hidden;
+          body.printing-resume * {
+            visibility: hidden !important;
           }
 
-          .resume-preview,
-          .resume-preview * {
-            visibility: visible;
+          body.printing-resume .resume-preview,
+          body.printing-resume .resume-preview * {
+            visibility: visible !important;
           }
 
-          .resume-preview {
+          body.printing-resume .resume-preview {
             position: absolute;
-            inset: 0;
+            top: 0;
+            left: 0;
             width: 100%;
+            margin: 0;
+            padding: 0;
             border: none;
             box-shadow: none;
           }
+
+          body.printing-resume .resume-preview section {
+            break-inside: avoid;
+          }
+        }
+
+        @page {
+          size: A4;
+          margin: 14mm;
         }
       `}</style>
     </main>
@@ -684,4 +873,5 @@ function App() {
 }
 
 export default App;
+
 
