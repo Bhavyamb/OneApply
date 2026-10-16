@@ -1,5 +1,8 @@
 fastapi
 uvicorn[standard]
+pymongo[srv]
+python-dotenv
+python-multipart
+pypdf
 requests
-pymongo
-httpx
+beautifulsoup4
